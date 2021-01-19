@@ -10,7 +10,6 @@ def get_fine_tune_train_set(opt,spatial_transform,target_transform):
             spatial_transform=spatial_transform, # image transform
             temporal_transform=None,
             target_transform=target_transform, # label transform
-            # TODO remove next line, only for test
             n_samples_for_each_video=100)
     else:
         print('if you want add new set, please add as datasets.ch19_datasets')
@@ -27,7 +26,6 @@ def get_fine_tune_val_set(opt,spatial_transform,target_transform):
             spatial_transform=spatial_transform,
             temporal_transform=None,
             target_transform=target_transform,
-            # TODO remove next line, only for test
             n_samples_for_each_video=100)
     else:
         print('if you want add new set, please add as datasets.ch19_datasets')
@@ -44,7 +42,6 @@ def get_fine_tune_test_set(opt,data_transforms):
             spatial_transform=data_transforms,
             temporal_transform=None,
             target_transform=None,
-            # TODO remove next line, only for test
             n_samples_for_each_video=100)
     else:
         print('if you want add new set, please add as datasets.ch19_datasets')
@@ -61,7 +58,6 @@ def get_training_set(opt, spatial_transform, temporal_transform, target_transfor
             spatial_transform=spatial_transform,
             temporal_transform=temporal_transform,
             target_transform=target_transform,
-            # TODO remove next line, only for test
             n_samples_for_each_video=100)
     else:
         print('if you want add new set, please add as datasets.ch19_datasets')

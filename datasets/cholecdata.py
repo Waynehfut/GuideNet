@@ -132,7 +132,9 @@ def make_finetune_dataset(root_dir, annotation_path, subset):
     for name, label in class_to_idx.items():
         idx_to_class[label] = name
     dataset = []
-    for item in database:
+    pbar = tqdm(range(len(database)))
+    for i in pbar:
+        item = database[i]
         img_slice = item[subset]
         for img_index in img_slice:
             sample = {
@@ -357,12 +359,15 @@ class CholecData(data.Dataset):
         """
         if self.is_finetune:  # finetune
             path = self.data[index]['path']
-            target = self.data[index]['current']
+            target = self.data[index]
             img_loader = get_default_image_loader()
             clip = img_loader(path)
             if self.spatial_transform is not None:
                 self.spatial_transform.randomize_parameters()
                 clip = self.spatial_transform(clip)
+            if self.target_transform is not None:
+                target = self.target_transform(target)
+                target = torch.tensor(target)
             target = torch.tensor(target)
             return clip, target
         elif self.is_guide:  # guide

@@ -9,7 +9,6 @@
    Check status:    https://waynehfut.com
 -------------------------------------------------
 """
-import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -18,12 +17,14 @@ import time
 import copy
 import logging
 from models.functions import initialize_cnn_model, CNNLSTM, CurrentPredict, PreviousGuide
+from utils.context_utils import GuidedLoss
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 # simple model train
-def model_train(model, dataloaders, criterion, optimizer, checkpoint_path, num_epochs):
+def model_train(model, dataloaders, criterion, criterion_gu, optimizer, checkpoint_path, num_epochs, adj_mat=None
+                ):
     model = nn.DataParallel(model)
     model.to(device)
     since = time.time()
@@ -47,16 +48,21 @@ def model_train(model, dataloaders, criterion, optimizer, checkpoint_path, num_e
             running_corrects = 0
 
             # Iterate over data.
-            for i, (inputs, labels) in enumerate(dataloaders[phase]):
+            for i, (inputs, combine_labels) in enumerate(dataloaders[phase]):
                 inputs = inputs.to(device)
-                labels = labels.to(device)
+                labels_last = combine_labels[:, 0].to(device)
+                labels = combine_labels[:, 1].to(device)
 
                 # zero the parameter gradients
                 optimizer.zero_grad()
                 # track history only in train
                 with torch.set_grad_enabled(phase == 'train'):
                     outputs = model(inputs)
-                    loss = criterion(outputs, labels)
+                    if criterion_gu:
+                        # TODO guide_loss=criterion_gu()
+                        loss = criterion(outputs, labels)
+                    else:
+                        loss = criterion(outputs, labels)
                     _, preds = torch.max(outputs, 1)
 
                     # backward + optimize only if in training phase
@@ -114,21 +120,21 @@ def model_test(model, dataloaders, criterion):
 
 
 def model_guide_train(model_current, model_previous, model_future, dataloders, criterion_pg,
-                      criterion_fu, optimizer, checkpoint_path, num_epochs, lambda_1_pt, lambda_2_pt):
+                      criterion_fu, criterion_gu, optimizer, checkpoint_path, num_epochs, lambda_1_pt, lambda_2_pt):
     """
     Training the guide model with the model_generator and model——discriminator,
     it should be noticed that the k_lambda_impact only used in evaluate
 
     :param model_current: Model architecture and weights for future predict.
     :param model_previous: Model architecture and weights for guide.
+    :param model_future: Model architecture and weights for future minding.
     :param dataloders: guide data with ['train', 'test', 'val']
     :param criterion_pg: previous criterion function
     :param criterion_fu: future criterion function
+    :param criterion_gu: guide criterion function
     :param optimizer: optimizer
     :param num_epochs: running epochs
     :param checkpoint_path: weights save path
-    :param lambda_1: control parameter for the importance between the previous.
-    :param lambda_2: control parameter for the importance between the future.
     :return: model_generator, val_history
     """
 
@@ -178,6 +184,7 @@ def model_guide_train(model_current, model_previous, model_future, dataloders, c
                     # cross-entropy for current model predict
                     cur_loss = criterion_pg(pre_p_labels, p_labels)
                     cur_fur_loss = criterion_pg(pre_f_labels, f_labels)
+                    # TODO guide_loss=criterion_gu()
                     fur_loss = criterion_fu(pre_f_labels, future_output.detach().requires_grad_(False))
                     _1, preds1 = torch.max(pre_p_labels, 1)
                     _2, preds2 = torch.max(pre_f_labels, 1)
@@ -252,11 +259,11 @@ def model_guide_test(model_predict, model_previous, dataloaders, criterion_pg, c
     logging.info('{} Loss: {:.4f} Acc: {:.4f}'.format('Test', test_loss, test_acc))
 
 
-def train_finetune(dataloaders_dict, out_path, model_name, num_epochs, feature_extract=True, lr=0.0001, momentum=0.85,
+def train_finetune(dataload_dict, out_path, model_name, num_epochs, feature_extract=True, lr=0.0001, momentum=0.85,
                    weight_decay=0.0001):
     """
     Finetune for CNN
-    :param dataloaders_dict: data dict
+    :param dataload_dict: data dict
     :param out_path: weight saved path.
     :param num_epochs: running epoch
     :param feature_extract: if extract feature, default True.
@@ -281,13 +288,14 @@ def train_finetune(dataloaders_dict, out_path, model_name, num_epochs, feature_e
             if param.requires_grad:
                 logging.info(name)
     optimizer_ft = optim.SGD(params_to_update, lr=lr, momentum=momentum, weight_decay=weight_decay)
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss().to(device)
+    criterion_gu = False
     ## train val
-    model_ft, hist = model_train(model_ft, dataloaders_dict, criterion, optimizer_ft, out_path, num_epochs)
+    model_ft, hist = model_train(model_ft, dataload_dict, criterion, criterion_gu, optimizer_ft, out_path, num_epochs)
     return model_ft, hist
 
 
-def pretrain_guide(dataloaders_dict, cnn_weights, out_path, num_epochs, lr=1e-3, momentum=0.85, rnn_lr=1e-5,
+def pretrain_guide(dataloader_dict, cnn_weights, out_path, num_epochs, lr=1e-3, momentum=0.85, rnn_lr=1e-5,
                    rnn_momentum=0.85, weight_decay=1e-4):
     """
     Pretrain the LSTM CNN model
@@ -296,7 +304,7 @@ def pretrain_guide(dataloaders_dict, cnn_weights, out_path, num_epochs, lr=1e-3,
     :param rnn_lr:
     :param momentum:
     :param lr:
-    :param dataloaders_dict: train, test, val dataset
+    :param dataloader_dict: train, test, val dataset
     :param cnn_weights: pretrained cnn weights
     :param out_path: model weights save path
     :param num_epochs: epochs number
@@ -322,8 +330,9 @@ def pretrain_guide(dataloaders_dict, cnn_weights, out_path, num_epochs, lr=1e-3,
 
     # loss function
     criterion = nn.CrossEntropyLoss().to(device)
-
-    model_ft, hist = model_train(cnnlstm_model, dataloaders_dict, criterion, optimizer_ft, out_path, num_epochs)
+    criterion_gu = GuidedLoss().to(device)
+    model_ft, hist = model_train(cnnlstm_model, dataloader_dict, criterion, criterion_gu, optimizer_ft, out_path,
+                                 num_epochs)
     return model_ft, hist
 
 
@@ -367,9 +376,10 @@ def train_guide(dataloders_dict, cnnlstm_weights, outpath, num_epochs, lambda_g=
     # build loss
     criterion_pg = nn.CrossEntropyLoss()
     criterion_fu = nn.SmoothL1Loss()
+    criterion_gu = GuidedLoss()
 
     # only update generator
     params_to_update = current_model.parameters()
     optimizer_ft = optim.SGD(params_to_update, lr=lr, momentum=momentum, weight_decay=weight_decay)
     model_guide_train(current_model, previous_guide_model, cnnlstm_model, dataloders_dict, criterion_pg,
-                      criterion_fu, optimizer_ft, outpath, num_epochs, lambda_1_pt, lambda_2_pt)
+                      criterion_fu, criterion_gu, optimizer_ft, outpath, num_epochs, lambda_1_pt, lambda_2_pt)

@@ -1,10 +1,16 @@
-is_test=True
-
 import os
-if is_test:
-    os.environ["CUDA_VISIBLE_DEVICES"] = "5,6,7,8,9"  # identify the GPU here.
-else:
-    os.environ["CUDA_VISIBLE_DEVICES"] = "3,4"  # identify the GPU here.
+os.environ["CUDA_VISIBLE_DEVICES"] = "5,6,7,8,9"  # identify the GPU here.
+sample_duration = 16
+n_sample_for_each_video = 32
+batch_size = 256
+log_type = ""
+root_dir = 'data/Frames/Full'
+anna_dir = 'data/Annotation/data.pkl'
+model_name = 'resnet50'
+finetune_weight_out = 'out/checkpoint/' + model_name + '_finetune_{}.pkl'
+pre_guide_weight_out = 'out/checkpoint/cnnlstm_preguide_{}.pkl'
+guided_weight_out = 'out/checkpoint/guided_cnnlstm_preguide_{}.pkl'
+
 
 from torch import nn
 import torch
@@ -13,13 +19,10 @@ from datasets.cholecdata import make_dataloader_dict
 from train_val import train_finetune, pretrain_guide, train_guide, model_test, model_guide_test
 from utils.mylogger import setup_logger
 import logging
+import torchvision.transforms as ts
 import utils.spatial_transforms as st
 import utils.target_transforms as tt
 import utils.temporal_transforms as tempt
-
-sample_duration = 16
-n_sample_for_each_video = 32
-batch_size = 256
 
 # Stage
 is_finetune = True
@@ -36,35 +39,28 @@ is_finetune_test = True
 is_pretrain_test = True
 is_guide_test = True
 
-model_name = ""
-log_type = ""
 if is_finetune:
-    log_type = "train_val"
-    model_name = "finetune"
+    log_type += "train_val"
+    train_name = "finetune"
     if is_finetune_test and not is_finetune_train:
-        log_type = "test_only"
+        log_type += "test_only"
 elif is_pretrain_guide:
-    log_type = "train_val"
-    model_name = "pretrain_guide"
+    log_type += "train_val"
+    train_name = "pretrain_guide"
     if is_pretrain_test and not is_pretrain_train:
-        log_type = "test_only"
+        log_type += "test_only"
 elif is_guide:
-    log_type = "train_val"
-    model_name = "guide"
+    log_type += "train_val"
+    train_name = "guide"
     if is_guide_test and not is_guide_train:
-        log_type = "test_only"
+        log_type += "test_only"
 
-setup_logger(model_name, log_type)
+setup_logger(train_name, log_type)
 
 logging.info('Let us using {} GPUs'.format(torch.cuda.device_count()))
-root_dir = 'data/Frames/Full'
-anna_dir = 'data/Annotation/data.pkl'
-model_name = 'resnet50'
-finetune_weight_out = 'out/checkpoint/' + model_name + '_finetune_{}.pkl'
-pre_guide_weight_out = 'out/checkpoint/cnnlstm_preguide_{}.pkl'
-guided_weight_out = 'out/checkpoint/guided_cnnlstm_preguide_{}.pkl'
 
-spatial_transform = st.Compose([st.Scale((224, 224)), st.ToTensor()])
+spatial_transform = st.Compose([st.Scale((250, 250)), st.MultiScaleRandomCrop([1], 224), st.ToTensor(),
+                                st.Normalize([0.3456, 0.2281, 0.2233], [0.2528, 0.2135, 0.2104])])
 
 temporal_transform = [tempt.TemporalSubsampling(2), tempt.TemporalRandomCrop(2), tempt.TemporalCenterCrop(16)]
 temporal_transform = tempt.Compose(temporal_transform)
@@ -72,11 +68,13 @@ temporal_transform = tempt.Compose(temporal_transform)
 if is_finetune:  # if finetune the CNN model
     is_pretrain_guide = False
     is_guide = False
+    target_transform = tt.ClassLabel()
     dataloaders_dict = make_dataloader_dict(root_dir=root_dir, annotation_path=anna_dir, is_finetune=is_finetune,
-                                            is_guide=is_guide, batch_size=batch_size,
-                                            spatial_transform=spatial_transform, temporal_transform=None)
+                                            is_guide=is_guide, batch_size=batch_size, sample_duration=sample_duration,
+                                            spatial_transform=spatial_transform, temporal_transform=temporal_transform,
+                                            target_transform=target_transform)
     if is_finetune_train:
-        model_ft, hist = train_finetune(dataloaders_dict, finetune_weight_out, model_name, num_epochs=300)
+        model_ft, hist = train_finetune(dataloaders_dict, finetune_weight_out, model_name, num_epochs=50)
     if is_finetune_test:  # finetune model test
         model = torch.load(finetune_weight_out.format('best'))
         criterion = nn.CrossEntropyLoss()
